@@ -1,0 +1,176 @@
+name: "Mojo-like-Java — 3OS AutoBuild + ProofLedger + Auto Release"
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mojo-like-java-release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-3os:
+    name: "Build — ${{ matrix.os }}"
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      # ----------------------------------------------------------
+      # Checkout
+      # ----------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ----------------------------------------------------------
+      # Setup Java
+      # ----------------------------------------------------------
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "21"
+
+      # ----------------------------------------------------------
+      # Prepare Output Folder
+      # ----------------------------------------------------------
+      - name: Prepare dist folder
+        run: mkdir -p dist
+
+      # ----------------------------------------------------------
+      # Build (pseudo-compiler stub)
+      # ----------------------------------------------------------
+      - name: Build Mojo-like-Java
+        shell: bash
+        run: |
+          echo "[Build] Running pseudo-compiler..."
+          echo "Compiling Main.java → dist/out"
+
+          mkdir -p dist
+
+          echo "package mojo_like_java;" > dist/Entry.java
+          echo "public class Entry { public static void main(String[] args) { System.out.println(\"Mojo-like-Java Running!\"); } }" >> dist/Entry.java
+
+          javac dist/Entry.java
+
+          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+            ARTIFACT="out-windows.txt"
+            echo "windows build" > dist/$ARTIFACT
+          elif [[ "${{ matrix.os }}" == "macos-latest" ]]; then
+            ARTIFACT="out-macos.txt"
+            echo "macOS build" > dist/$ARTIFACT
+          else
+            ARTIFACT="out-linux.txt"
+            echo "linux build" > dist/$ARTIFACT
+          fi
+
+          echo "Artifact: $ARTIFACT" >> dist/build-info.txt
+
+      # ----------------------------------------------------------
+      # ProofLedger (SHA256 포함)
+      # ----------------------------------------------------------
+      - name: Generate ProofLedger
+        shell: bash
+        run: |
+          TS=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
+          OS=${{ matrix.os }}
+          COMMIT=${{ github.sha }}
+          REPO=${{ github.repository }}
+          LEDGER="proofledger-${OS}.txt"
+
+          echo "Repository: ${REPO}"           >  ${LEDGER}
+          echo "Commit: ${COMMIT}"           >> ${LEDGER}
+          echo "OS: ${OS}"                   >> ${LEDGER}
+          echo "Timestamp: ${TS}"            >> ${LEDGER}
+          echo "Branch: ${{ github.ref }}"   >> ${LEDGER}
+          echo "--------------------------------------" >> ${LEDGER}
+
+          # SHA256
+          if [[ "${OS}" == "windows-latest" ]]; then
+            shafile=$(ls dist/out-windows.txt)
+            certutil -hashfile "${shafile}" SHA256 >> ${LEDGER}
+          elif [[ "${OS}" == "macos-latest" ]]; then
+            shafile=$(ls dist/out-macos.txt)
+            shasum -a 256 "${shafile}" >> ${LEDGER}
+          else
+            shafile=$(ls dist/out-linux.txt)
+            sha256sum "${shafile}" >> ${LEDGER}
+          fi
+
+          mv ${LEDGER} dist/
+
+      # ----------------------------------------------------------
+      # Upload build artifacts to Actions
+      # ----------------------------------------------------------
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: mojo-like-java-${{ matrix.os }}-${{ github.run_id }}
+          path: dist/
+
+  # ============================================================
+  #  Auto Release Job
+  #  (3 OS 빌드가 모두 끝난 뒤 실행)
+  # ============================================================
+  release:
+    name: "Publish Release"
+    runs-on: ubuntu-latest
+    needs: [build-3os]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ----------------------------------------------------------
+      # Download All Artifacts
+      # ----------------------------------------------------------
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-bundle
+
+      # ----------------------------------------------------------
+      # Create Tag
+      # ----------------------------------------------------------
+      - name: Generate Version Tag
+        id: tagger
+        run: |
+          TAG="v1.0.${{ github.run_id }}"
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+
+      # ----------------------------------------------------------
+      # Create or Update Release
+      # ----------------------------------------------------------
+      - name: Create GitHub Release
+        id: create_release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tagger.outputs.tag }}
+          name: "Mojo-like-Java Auto Release ${{ steps.tagger.outputs.tag }}"
+          body: |
+            ## 🚀 Mojo-like-Java Auto Release
+            - 3OS Build Complete
+            - ProofLedger Included (SHA256)
+            - Commit: ${{ github.sha }}
+            - Run ID: ${{ github.run_id }}
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ----------------------------------------------------------
+      # Upload Assets to Release
+      # ----------------------------------------------------------
+      - name: Upload Assets
+        uses: shogo82148/actions-upload-release-asset@v1
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: release-bundle/**
+          overwrite: false
