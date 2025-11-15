@@ -39,30 +39,26 @@ jobs:
         run: |
           OS_TAG="${{ matrix.os }}"
 
-          # 파일 이름을 OS별로 확실히 분리
+          # 파일 이름
           ENTRY_JAVA="Entry-${OS_TAG}.java"
           ENTRY_CLASS="Entry-${OS_TAG}.class"
           BUILD_INFO="build-info-${OS_TAG}.txt"
 
-          echo "package mojo_like_java;" > ${ENTRY_JAVA}
-          echo "public class Entry { public static void main(String[] args) { System.out.println(\"Mojo-like-Java Running!\"); } }" >> ${ENTRY_JAVA}
+          # public class 제거 (Java 파일명 규칙 우회)
+          echo "class Entry { public static void main(String[] args) { System.out.println(\"Mojo-like-Java Running on ${OS_TAG}!\"); } }" > ${ENTRY_JAVA}
 
+          # 컴파일
           javac ${ENTRY_JAVA}
 
-          mv Entry.class ${ENTRY_CLASS}
+          mv Entry.class ${ENTRY_CLASS} || true
+
           mv ${ENTRY_JAVA} dist/
           mv ${ENTRY_CLASS} dist/
 
           echo "Build on ${OS_TAG}" > dist/${BUILD_INFO}
 
-          # OS별 아티팩트 구분
-          if [[ "${OS_TAG}" == "windows-latest" ]]; then
-            echo "windows build" > dist/out-${OS_TAG}.txt
-          elif [[ "${OS_TAG}" == "macos-latest" ]]; then
-            echo "macOS build" > dist/out-${OS_TAG}.txt
-          else
-            echo "linux build" > dist/out-${OS_TAG}.txt
-          fi
+          # OS별 출력 파일
+          echo "${OS_TAG} build" > dist/out-${OS_TAG}.txt
 
       - name: Generate ProofLedger
         shell: bash
@@ -77,7 +73,6 @@ jobs:
           echo "Branch: ${{ github.ref }}" >> ${LEDGER}
           echo "--------------------------------------" >> ${LEDGER}
 
-          # SHA256
           sha_file=$(ls dist/out-${OS_TAG}.txt)
 
           if [[ "${OS_TAG}" == "windows-latest" ]]; then
@@ -122,10 +117,10 @@ jobs:
           name: "Mojo-like-Java Auto Release ${{ steps.tagger.outputs.tag }}"
           body: |
             ## 🚀 Mojo-like-Java Auto Release
-            3 OS Build Completed  
-            ProofLedger Included  
-            SHA256 Verified  
-            Commit: ${{ github.sha }}
+            - 3OS Build Completed  
+            - ProofLedger Included  
+            - SHA256 Verified  
+            - Commit: ${{ github.sha }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
