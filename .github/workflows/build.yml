@@ -21,104 +21,81 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
 
     steps:
-      # ----------------------------------------------------------
-      # Checkout
-      # ----------------------------------------------------------
+
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      # ----------------------------------------------------------
-      # Setup Java
-      # ----------------------------------------------------------
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: "temurin"
           java-version: "21"
 
-      # ----------------------------------------------------------
-      # Prepare Output Folder
-      # ----------------------------------------------------------
-      - name: Prepare dist folder
+      - name: Create dist folder
         run: mkdir -p dist
 
-      # ----------------------------------------------------------
-      # Build (pseudo-compiler stub)
-      # ----------------------------------------------------------
       - name: Build Mojo-like-Java
         shell: bash
         run: |
-          echo "[Build] Running pseudo-compiler..."
-          echo "Compiling Main.java → dist/out"
+          OS_TAG="${{ matrix.os }}"
 
-          mkdir -p dist
+          # 파일 이름을 OS별로 확실히 분리
+          ENTRY_JAVA="Entry-${OS_TAG}.java"
+          ENTRY_CLASS="Entry-${OS_TAG}.class"
+          BUILD_INFO="build-info-${OS_TAG}.txt"
 
-          echo "package mojo_like_java;" > dist/Entry.java
-          echo "public class Entry { public static void main(String[] args) { System.out.println(\"Mojo-like-Java Running!\"); } }" >> dist/Entry.java
+          echo "package mojo_like_java;" > ${ENTRY_JAVA}
+          echo "public class Entry { public static void main(String[] args) { System.out.println(\"Mojo-like-Java Running!\"); } }" >> ${ENTRY_JAVA}
 
-          javac dist/Entry.java
+          javac ${ENTRY_JAVA}
 
-          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
-            ARTIFACT="out-windows.txt"
-            echo "windows build" > dist/$ARTIFACT
-          elif [[ "${{ matrix.os }}" == "macos-latest" ]]; then
-            ARTIFACT="out-macos.txt"
-            echo "macOS build" > dist/$ARTIFACT
+          mv Entry.class ${ENTRY_CLASS}
+          mv ${ENTRY_JAVA} dist/
+          mv ${ENTRY_CLASS} dist/
+
+          echo "Build on ${OS_TAG}" > dist/${BUILD_INFO}
+
+          # OS별 아티팩트 구분
+          if [[ "${OS_TAG}" == "windows-latest" ]]; then
+            echo "windows build" > dist/out-${OS_TAG}.txt
+          elif [[ "${OS_TAG}" == "macos-latest" ]]; then
+            echo "macOS build" > dist/out-${OS_TAG}.txt
           else
-            ARTIFACT="out-linux.txt"
-            echo "linux build" > dist/$ARTIFACT
+            echo "linux build" > dist/out-${OS_TAG}.txt
           fi
 
-          echo "Artifact: $ARTIFACT" >> dist/build-info.txt
-
-      # ----------------------------------------------------------
-      # ProofLedger (SHA256 포함)
-      # ----------------------------------------------------------
       - name: Generate ProofLedger
         shell: bash
         run: |
-          TS=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
-          OS=${{ matrix.os }}
-          COMMIT=${{ github.sha }}
-          REPO=${{ github.repository }}
-          LEDGER="proofledger-${OS}.txt"
+          OS_TAG="${{ matrix.os }}"
+          LEDGER="proofledger-${OS_TAG}.txt"
 
-          echo "Repository: ${REPO}"           >  ${LEDGER}
-          echo "Commit: ${COMMIT}"           >> ${LEDGER}
-          echo "OS: ${OS}"                   >> ${LEDGER}
-          echo "Timestamp: ${TS}"            >> ${LEDGER}
-          echo "Branch: ${{ github.ref }}"   >> ${LEDGER}
+          echo "Repository: ${{ github.repository }}" > ${LEDGER}
+          echo "Commit: ${{ github.sha }}" >> ${LEDGER}
+          echo "OS: ${OS_TAG}" >> ${LEDGER}
+          echo "Timestamp: $(date -u +"%Y-%m-%d %H:%M:%S UTC")" >> ${LEDGER}
+          echo "Branch: ${{ github.ref }}" >> ${LEDGER}
           echo "--------------------------------------" >> ${LEDGER}
 
           # SHA256
-          if [[ "${OS}" == "windows-latest" ]]; then
-            shafile=$(ls dist/out-windows.txt)
-            certutil -hashfile "${shafile}" SHA256 >> ${LEDGER}
-          elif [[ "${OS}" == "macos-latest" ]]; then
-            shafile=$(ls dist/out-macos.txt)
-            shasum -a 256 "${shafile}" >> ${LEDGER}
+          sha_file=$(ls dist/out-${OS_TAG}.txt)
+
+          if [[ "${OS_TAG}" == "windows-latest" ]]; then
+            certutil -hashfile "${sha_file}" SHA256 >> ${LEDGER}
+          elif [[ "${OS_TAG}" == "macos-latest" ]]; then
+            shasum -a 256 "${sha_file}" >> ${LEDGER}
           else
-            shafile=$(ls dist/out-linux.txt)
-            sha256sum "${shafile}" >> ${LEDGER}
+            sha256sum "${sha_file}" >> ${LEDGER}
           fi
 
           mv ${LEDGER} dist/
 
-      # ----------------------------------------------------------
-      # Upload build artifacts to Actions
-      # ----------------------------------------------------------
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: mojo-like-java-${{ matrix.os }}-${{ github.run_id }}
           path: dist/
 
-  # ============================================================
-  #  Auto Release Job
-  #  (3 OS 빌드가 모두 끝난 뒤 실행)
-  # ============================================================
   release:
     name: "Publish Release"
     runs-on: ubuntu-latest
@@ -128,26 +105,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # ----------------------------------------------------------
-      # Download All Artifacts
-      # ----------------------------------------------------------
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: release-bundle
 
-      # ----------------------------------------------------------
-      # Create Tag
-      # ----------------------------------------------------------
-      - name: Generate Version Tag
+      - name: Generate version tag
         id: tagger
-        run: |
-          TAG="v1.0.${{ github.run_id }}"
-          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+        run: echo "tag=v1.0.${{ github.run_id }}" >> $GITHUB_OUTPUT
 
-      # ----------------------------------------------------------
-      # Create or Update Release
-      # ----------------------------------------------------------
       - name: Create GitHub Release
         id: create_release
         uses: softprops/action-gh-release@v2
@@ -156,19 +122,14 @@ jobs:
           name: "Mojo-like-Java Auto Release ${{ steps.tagger.outputs.tag }}"
           body: |
             ## 🚀 Mojo-like-Java Auto Release
-            - 3OS Build Complete
-            - ProofLedger Included (SHA256)
-            - Commit: ${{ github.sha }}
-            - Run ID: ${{ github.run_id }}
-          draft: false
-          prerelease: false
+            3 OS Build Completed  
+            ProofLedger Included  
+            SHA256 Verified  
+            Commit: ${{ github.sha }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # ----------------------------------------------------------
-      # Upload Assets to Release
-      # ----------------------------------------------------------
-      - name: Upload Assets
+      - name: Upload Assets to Release
         uses: shogo82148/actions-upload-release-asset@v1
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
