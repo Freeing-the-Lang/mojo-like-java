@@ -21,16 +21,26 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
 
     steps:
-
+      # ----------------------------------------------------------
+      # Checkout
+      # ----------------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
+      # ----------------------------------------------------------
+      # Java
+      # ----------------------------------------------------------
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: "temurin"
           java-version: "21"
 
+      # ----------------------------------------------------------
+      # Build
+      # ----------------------------------------------------------
       - name: Create dist folder
         run: mkdir -p dist
 
@@ -39,27 +49,26 @@ jobs:
         run: |
           OS_TAG="${{ matrix.os }}"
 
-          # 파일 이름
           ENTRY_JAVA="Entry-${OS_TAG}.java"
           ENTRY_CLASS="Entry-${OS_TAG}.class"
           BUILD_INFO="build-info-${OS_TAG}.txt"
 
-          # public class 제거 (Java 파일명 규칙 우회)
           echo "class Entry { public static void main(String[] args) { System.out.println(\"Mojo-like-Java Running on ${OS_TAG}!\"); } }" > ${ENTRY_JAVA}
 
-          # 컴파일
           javac ${ENTRY_JAVA}
 
-          mv Entry.class ${ENTRY_CLASS} || true
+          mv Entry.class ${ENTRY_CLASS}
 
           mv ${ENTRY_JAVA} dist/
           mv ${ENTRY_CLASS} dist/
 
           echo "Build on ${OS_TAG}" > dist/${BUILD_INFO}
 
-          # OS별 출력 파일
           echo "${OS_TAG} build" > dist/out-${OS_TAG}.txt
 
+      # ----------------------------------------------------------
+      # ProofLedger (SHA256)
+      # ----------------------------------------------------------
       - name: Generate ProofLedger
         shell: bash
         run: |
@@ -73,7 +82,7 @@ jobs:
           echo "Branch: ${{ github.ref }}" >> ${LEDGER}
           echo "--------------------------------------" >> ${LEDGER}
 
-          sha_file=$(ls dist/out-${OS_TAG}.txt)
+          sha_file="dist/out-${OS_TAG}.txt"
 
           if [[ "${OS_TAG}" == "windows-latest" ]]; then
             certutil -hashfile "${sha_file}" SHA256 >> ${LEDGER}
@@ -85,12 +94,18 @@ jobs:
 
           mv ${LEDGER} dist/
 
+      # ----------------------------------------------------------
+      # Upload to Actions
+      # ----------------------------------------------------------
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: mojo-like-java-${{ matrix.os }}-${{ github.run_id }}
           path: dist/
 
+  # ============================================================
+  # Release job
+  # ============================================================
   release:
     name: "Publish Release"
     runs-on: ubuntu-latest
@@ -100,15 +115,34 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # ----------------------------------------------------------
+      # Download all artifacts
+      # ----------------------------------------------------------
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: release-bundle
 
+      # ----------------------------------------------------------
+      # ZIP each OS bundle (중복/폴더 문제 완전 해결)
+      # ----------------------------------------------------------
+      - name: Zip artifacts
+        run: |
+          cd release-bundle
+          for d in */ ; do
+            zip -r "${d%/}.zip" "$d"
+          done
+
+      # ----------------------------------------------------------
+      # Version Tag
+      # ----------------------------------------------------------
       - name: Generate version tag
         id: tagger
         run: echo "tag=v1.0.${{ github.run_id }}" >> $GITHUB_OUTPUT
 
+      # ----------------------------------------------------------
+      # Create GitHub Release
+      # ----------------------------------------------------------
       - name: Create GitHub Release
         id: create_release
         uses: softprops/action-gh-release@v2
@@ -117,16 +151,19 @@ jobs:
           name: "Mojo-like-Java Auto Release ${{ steps.tagger.outputs.tag }}"
           body: |
             ## 🚀 Mojo-like-Java Auto Release
-            - 3OS Build Completed  
-            - ProofLedger Included  
-            - SHA256 Verified  
+            - 3 OS Build Complete
+            - ProofLedger Included (SHA256)
             - Commit: ${{ github.sha }}
+            - Run ID: ${{ github.run_id }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload Assets to Release
+      # ----------------------------------------------------------
+      # Upload ZIP assets
+      # ----------------------------------------------------------
+      - name: Upload zipped assets to Release
         uses: shogo82148/actions-upload-release-asset@v1
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: release-bundle/**
+          asset_path: release-bundle/*.zip
           overwrite: false
